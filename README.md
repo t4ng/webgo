@@ -10,4 +10,5 @@ app.Route("/fuck", func(req *webgo.Request) *webgo.Response {
 app.Route(`/user/(\d+)/`, func(req *webgo.Request) *webgo.Response {
   return Respond(200, "user: "+req.Arguments[0])
 })
+app.Run(":8080")
 ```
