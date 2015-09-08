@@ -1,4 +1,4 @@
-package main
+package webgo
 
 import (
 	"encoding/json"
