@@ -1,7 +1,6 @@
 package webgo
 
 import (
-	"encoding/json"
 	"io/ioutil"
 	"net/http"
 	"regexp"
@@ -11,7 +10,7 @@ import (
 type Request struct {
 	Method    string
 	Path      string
-	Params    map[string]interface{}
+	Query    map[string]string
 	Headers   map[string]string
 	Body      []byte
 	Context   interface{}
@@ -80,29 +79,17 @@ func (app *Application) Route(pattern string, fn ProcessFunc) {
 func (app *Application) ParseRequest(r *http.Request) *Request {
 	method := r.Method
 	path := r.URL.Path
-	body := []byte{}
-	params := map[string]interface{}{}
-
-	if method == "GET" {
-		query := r.URL.Query()
-		params = make(map[string]interface{})
-		for name, values := range query {
-			params[name] = values[0]
-		}
-	} else {
-		body, _ = ioutil.ReadAll(r.Body)
-		var iface interface{}
-		err := json.Unmarshal(body, &iface)
-		if err != nil {
-			return nil
-		}
-		params = iface.(map[string]interface{})
+	body, _ := ioutil.ReadAll(r.Body)
+	
+	query := make(map[string]string)
+	for name, values := range r.URL.Query() {
+		query[name] = values[0]
 	}
-
+	
 	return &Request{
 		Method:  method,
 		Path:    path,
-		Params:  params,
+		Query:   query,
 		Body:    body,
 		Context: app,
 	}
