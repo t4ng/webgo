@@ -1,6 +1,7 @@
 package webgo
 
 import (
+	"io"
 	"io/ioutil"
 	"net/http"
 	"regexp"
@@ -10,17 +11,17 @@ import (
 type Request struct {
 	Method    string
 	Path      string
-	Query    map[string]string
-	Headers   map[string]string
+	Query     map[string]string
+	Headers   http.Header
 	Body      []byte
-	Context   interface{}
 	Arguments []string
 }
 
 type Response struct {
-	Status  int
-	Headers map[string]string
-	Body    []byte
+	Status     int
+	Headers    http.Header
+	Body       []byte
+	BodyReader io.Reader
 }
 
 type Processor struct {
@@ -32,6 +33,20 @@ type Application struct {
 	httpServer       *http.Server
 	processors       []*Processor
 	defaultProcessor *Processor
+}
+
+func Respond(status int, body []byte) *Response {
+	return &Response{
+		Status:  status,
+		Body:    body,
+		Headers: make(http.Header),
+	}
+}
+
+func Redirect(redirectUrl string) *Response {
+	resp := Respond(302, []byte{})
+	resp.Headers.Set("Location", redirectUrl)
+	return resp
 }
 
 func NewApplication() *Application {
@@ -58,8 +73,11 @@ func (app *Application) AddProcessor(p *Processor) {
 
 type ProcessFunc func(*Request) *Response
 
-func (app *Application) Route(pattern string, fn ProcessFunc) {
+func (app *Application) Route(pattern string, procFunc ProcessFunc) {
 	pattern = strings.TrimRight(pattern, "/")
+	if strings.IndexByte(pattern, ' ') < 0 {
+		pattern = ".* " + pattern
+	}
 	pattern = "^" + pattern + "$"
 	re, _ := regexp.Compile(pattern)
 
@@ -72,47 +90,44 @@ func (app *Application) Route(pattern string, fn ProcessFunc) {
 
 	app.AddProcessor(&Processor{
 		Match:   matchFunc,
-		Process: fn,
+		Process: procFunc,
 	})
 }
 
-func (app *Application) ParseRequest(r *http.Request) *Request {
+func ParseRequest(r *http.Request) *Request {
 	method := r.Method
 	path := r.URL.Path
 	body, _ := ioutil.ReadAll(r.Body)
-	
+
 	query := make(map[string]string)
 	for name, values := range r.URL.Query() {
 		query[name] = values[0]
 	}
-	
+
 	return &Request{
 		Method:  method,
 		Path:    path,
 		Query:   query,
+		Headers: r.Header,
 		Body:    body,
-		Context: app,
 	}
 }
 
-func (app *Application) ParseResponse(resp *http.Response) *Response {
+func ParseResponse(resp *http.Response) *Response {
 	status := resp.StatusCode
-	headers := make(map[string]string)
 	body, _ := ioutil.ReadAll(resp.Body)
-
-	for name, _ := range resp.Header {
-		headers[name] = resp.Header.Get(name)
-	}
+	defer resp.Body.Close()
 
 	return &Response{
-		Status:  status,
-		Headers: headers,
-		Body:    body,
+		Status:     status,
+		Headers:    resp.Header,
+		Body:       body,
+		BodyReader: nil,
 	}
 }
 
 func (app *Application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	req := app.ParseRequest(r)
+	req := ParseRequest(r)
 	if req == nil {
 		http.Error(w, "Bad Request", 400)
 		return
@@ -120,6 +135,7 @@ func (app *Application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	processor := app.defaultProcessor
 	path := strings.TrimRight(req.Path, "/")
+	path = req.Method + " " + path
 	for _, p := range app.processors {
 		if ok, args := p.Match(path); ok {
 			processor = p
@@ -134,9 +150,14 @@ func (app *Application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := processor.Process(req)
-	w.WriteHeader(resp.Status)
 	for name, value := range resp.Headers {
-		w.Header().Set(name, value)
+		w.Header().Set(name, value[0])
 	}
-	w.Write(resp.Body)
+	w.WriteHeader(resp.Status)
+
+	if resp.BodyReader != nil {
+		io.Copy(w, resp.BodyReader)
+	} else {
+		w.Write(resp.Body)
+	}
 }
